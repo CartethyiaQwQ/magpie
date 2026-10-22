@@ -95,6 +95,18 @@ func plainForbidden(c candidate, status int, body []byte) bool {
 		!modelRefused(status, body) && !codeAssistModelMissing(c.p, status, body)
 }
 
+// safetyRefused says a reply is the vendor's safety filter refusing the
+// request's own content — OpenAI's 400 "safety filter: cyber_policy", with
+// its Daybreak note. The refusal follows the content, not the key: any
+// account asked gives the same answer, so resting one (failOther's backoff
+// ladder, or a window's rest once its usage is read) benches the pool on a
+// request it would always refuse.
+func safetyRefused(status int, body []byte) bool {
+	return status == http.StatusBadRequest && safetyWords.Match(wordsOf(body))
+}
+
+var safetyWords = regexp.MustCompile(`safety filter|cyber_policy|Daybreak access`)
+
 // forbiddenAlike is the plain 403s of c's mates earlier in the request:
 // another key or account of its provider, asked the same model at the
 // same reasoning. Two of them refusing one request alike, it is the
@@ -818,6 +830,12 @@ func (s *Server) restAfterMarked(c candidate, status int, header http.Header, bo
 		// Command Code's Zero Data Retention setting refused the request:
 		// the model and the account are as good as they were, and answer
 		// as soon as the switch is off
+		return Rest{Why: why, Status: status, By: "off", Until: now}
+	}
+	if safetyRefused(status, body) {
+		// the safety filter refused the request itself: the model and the
+		// account are as good as they were, so none is set aside and the
+		// failure counts nowhere
 		return Rest{Why: why, Status: status, By: "off", Until: now}
 	}
 	// read before the allowance is asked again below: out of a pool that
